@@ -1,263 +1,144 @@
 'use client'
-import { useState, useEffect } from 'react'
-import { useParams, useRouter } from 'next/navigation'
+// ═══════════════════════════════════════════════════════════════════════════
+// JALONS PAGE — app/(app)/projects/[id]/jalons/page.tsx
+// ═══════════════════════════════════════════════════════════════════════════
+import { useState, useEffect, useCallback } from 'react'
+import { useParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import AppLayout from '@/components/layout/AppLayout'
+import ActionBar from '@/components/ActionBar'
+import { useHistory, HistoryEntry } from '@/hooks/useHistory'
+import { printSection, exportToExcel, exportToPDF, exportToDrive, exportToNotion, exportToGmail } from '@/lib/exportUtils'
+import { EmptyState, LoadingState } from '@/components/pmo-shared'
 
-const JALON_TYPES = {
-  livrable:   { label: 'Livrable',    icon: '📦', color: 'var(--blue)'   },
-  go_nogo:    { label: 'GO/NO-GO',   icon: '🚦', color: 'var(--amber)'  },
-  recette:    { label: 'Recette',     icon: '🧪', color: 'var(--purple)' },
-  deploiement:{ label: 'Déploiement', icon: '🚀', color: 'var(--cyan)'   },
-  reunion:    { label: 'Réunion',     icon: '👥', color: 'var(--green)'  },
-  autre:      { label: 'Autre',       icon: '📌', color: 'var(--muted)'  },
+interface Jalon {
+  id: string; code: string; name: string; date: string
+  status: 'Planifié' | 'En cours' | 'Atteint' | 'En retard'
+  description: string; deliverables: string; responsible: string; dependencies: string
 }
 
-const STATUS_JALONS = {
-  pending:     { label: 'À venir',   cls: 'b-amber' },
-  in_progress: { label: 'En cours', cls: 'b-cyan'  },
-  done:        { label: 'Atteint',  cls: 'b-green' },
-  blocked:     { label: 'Bloqué',   cls: 'b-red'   },
+const STATUS_CONFIG = {
+  'Planifié':  { color: '#3b82f6', icon: '📅' },
+  'En cours':  { color: '#f59e0b', icon: '🔄' },
+  'Atteint':   { color: '#22c55e', icon: '✅' },
+  'En retard': { color: '#ef4444', icon: '⚠️' },
 }
 
 export default function JalonsPage() {
-  const [jalons, setJalons]     = useState<any[]>([])
-  const [project, setProject]   = useState<any>(null)
-  const [loading, setLoading]   = useState(true)
-  const [showForm, setShowForm] = useState(false)
-  const [saving, setSaving]     = useState(false)
-  const [editId, setEditId]     = useState<string | null>(null)
-  const [form, setForm]         = useState({
-    name: '', jalon_type: 'livrable', target_date: '', status: 'pending', notes: ''
-  })
-  const params   = useParams()
-  const router   = useRouter()
+  const { id } = useParams<{ id: string }>()
   const supabase = createClient()
-  const id = params.id as string
+  const [project, setProject] = useState<any>(null)
+  const [jalons, setJalons] = useState<Jalon[]>([])
+  const [loading, setLoading] = useState(false)
+  const { history, saveToHistory, lastEntry } = useHistory(id, 'jalons')
 
-  useEffect(() => { loadData() }, [id])
+  useEffect(() => {
+    supabase.from('projects').select('*').eq('id', id).single()
+      .then(({ data }) => { if (data) setProject(data) })
+  }, [id])
 
-  async function loadData() {
-    const { data: proj } = await supabase.from('projects').select('name').eq('id', id).single()
-    setProject(proj)
-    const { data } = await supabase.from('jalons').select('*').eq('project_id', id).order('target_date', { ascending: true })
-    setJalons(data || [])
-    setLoading(false)
-  }
-
-  function set(k: string, v: any) { setForm(f => ({ ...f, [k]: v })) }
-
-  async function saveJalon() {
-    if (!form.name.trim()) return
-    setSaving(true)
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return
-    const payload = { ...form, project_id: id, user_id: user.id }
-    if (editId) {
-      await supabase.from('jalons').update(payload).eq('id', editId)
-    } else {
-      await supabase.from('jalons').insert(payload)
+  useEffect(() => {
+    if (lastEntry && jalons.length === 0) {
+      const d = lastEntry.data as any
+      if (d?.jalons) setJalons(d.jalons)
     }
-    setForm({ name: '', jalon_type: 'livrable', target_date: '', status: 'pending', notes: '' })
-    setShowForm(false); setEditId(null); setSaving(false)
-    loadData()
+  }, [lastEntry])
+
+  const generate = useCallback(async () => {
+    if (!project) return
+    setLoading(true)
+    try {
+      const res = await fetch('/api/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tab: 'jalons',
+          project_name: project.name,
+          prompt: `Génère les jalons clés pour le projet "${project.name}". 
+Retourne UNIQUEMENT du JSON: {"jalons":[{"id":"J1","code":"M0","name":"Lancement","date":"2025-01-15","status":"Planifié","description":"...","deliverables":"Charte signée","responsible":"Chef de Projet","dependencies":""}]}
+Minimum 8 jalons couvrant tout le cycle de vie.`
+        })
+      })
+      const data = await res.json()
+      const parsed = JSON.parse(data.content.replace(/```json|```/g, '').trim())
+      setJalons(parsed.jalons)
+      await saveToHistory(`Jalons — ${new Date().toLocaleDateString('fr-FR')}`, { jalons: parsed.jalons })
+    } catch (e) { console.error(e) }
+    finally { setLoading(false) }
+  }, [project, saveToHistory])
+
+  const loadHistory = (entry: HistoryEntry) => {
+    const d = entry.data as any
+    if (d?.jalons) setJalons(d.jalons)
   }
 
-  async function deleteJalon(jalonId: string) {
-    if (!confirm('Supprimer ce jalon ?')) return
-    await supabase.from('jalons').delete().eq('id', jalonId)
-    loadData()
-  }
-
-  async function toggleStatus(item: any) {
-    const next = { pending: 'in_progress', in_progress: 'done', done: 'pending', blocked: 'pending' }
-    await supabase.from('jalons').update({ status: next[item.status as keyof typeof next] }).eq('id', item.id)
-    loadData()
-  }
-
-  const today = new Date()
-  const overdue = jalons.filter(j => j.status !== 'done' && j.target_date && new Date(j.target_date) < today)
-  const upcoming = jalons.filter(j => j.status !== 'done' && j.target_date && new Date(j.target_date) >= today)
-  const done = jalons.filter(j => j.status === 'done')
-
-  function JalonCard({ item }: { item: any }) {
-    const cfg = JALON_TYPES[item.jalon_type as keyof typeof JALON_TYPES] || JALON_TYPES.autre
-    const status = STATUS_JALONS[item.status as keyof typeof STATUS_JALONS]
-    const isOverdue = item.status !== 'done' && item.target_date && new Date(item.target_date) < today
-    const daysLeft = item.target_date ? Math.ceil((new Date(item.target_date).getTime() - today.getTime()) / (1000 * 60 * 60 * 24)) : null
-
-    return (
-      <div className="card" style={{ borderLeft: `3px solid ${isOverdue ? 'var(--red)' : cfg.color}` }}>
-        <div style={{ display:'flex', alignItems:'center', gap:12, padding:'12px 16px' }}>
-          <div style={{ width:36, height:36, borderRadius:8, background:`${cfg.color}22`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:18, flexShrink:0, cursor:'pointer' }}
-            onClick={() => toggleStatus(item)} title="Cliquer pour changer le statut">
-            {cfg.icon}
-          </div>
-          <div style={{ flex:1, minWidth:0 }}>
-            <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:4, flexWrap:'wrap' }}>
-              <span style={{ fontSize:13, fontWeight:500, color:'var(--text)' }}>{item.name}</span>
-              <span className={`badge ${status?.cls}`}>{status?.label}</span>
-              <span style={{ fontSize:10, color:isOverdue ? 'var(--red)' : 'var(--dim)' }}>
-                {cfg.label}
-              </span>
-            </div>
-            <div style={{ display:'flex', gap:16, alignItems:'center' }}>
-              {item.target_date && (
-                <span style={{ fontSize:11, color: isOverdue ? 'var(--red)' : 'var(--dim)', fontWeight: isOverdue ? 600 : 400 }}>
-                  📅 {new Date(item.target_date).toLocaleDateString('fr-FR')}
-                  {daysLeft !== null && item.status !== 'done' && (
-                    <span style={{ marginLeft:6, color: isOverdue ? 'var(--red)' : daysLeft <= 7 ? 'var(--amber)' : 'var(--dim)' }}>
-                      ({isOverdue ? `${Math.abs(daysLeft)}j de retard` : daysLeft === 0 ? "aujourd'hui" : `J-${daysLeft}`})
-                    </span>
-                  )}
-                </span>
-              )}
-              {item.notes && <span style={{ fontSize:11, color:'var(--muted)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:300 }}>{item.notes}</span>}
-            </div>
-          </div>
-          <div style={{ display:'flex', gap:6, flexShrink:0 }}>
-            <button onClick={() => { setForm({ name:item.name, jalon_type:item.jalon_type, target_date:item.target_date||'', status:item.status, notes:item.notes||'' }); setEditId(item.id); setShowForm(true) }}
-              style={{ background:'var(--ink3)', border:'1px solid var(--line2)', borderRadius:6, padding:'5px 10px', cursor:'pointer', fontSize:11, color:'var(--muted)', fontFamily:'var(--mono)' }}>✎</button>
-            <button onClick={() => deleteJalon(item.id)}
-              style={{ background:'rgba(224,80,80,.1)', border:'1px solid rgba(224,80,80,.2)', borderRadius:6, padding:'5px 10px', cursor:'pointer', fontSize:11, color:'var(--red)', fontFamily:'var(--mono)' }}>🗑</button>
-          </div>
-        </div>
-      </div>
-    )
-  }
+  const toRows = () => jalons.map(j => ({
+    Code: j.code, Nom: j.name, Date: j.date, Statut: j.status,
+    Description: j.description, Livrables: j.deliverables,
+    Responsable: j.responsible, Dépendances: j.dependencies
+  }))
 
   return (
     <AppLayout>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:20 }}>
-        <div>
-          <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8 }}>
-            <button onClick={() => router.push(`/projects/${id}`)} style={{ background:'none', border:'none', color:'var(--muted)', cursor:'pointer', fontSize:12 }}>← Projet</button>
-            <span style={{ color:'var(--dim)' }}>›</span>
-            <span style={{ fontSize:12, color:'var(--dim)' }}>{project?.name}</span>
+      <div style={{ padding: '24px 32px', background: '#0a0f1a', minHeight: '100vh', color: '#e2e8f0' }}>
+        <div style={{ marginBottom: 8 }}>
+          <div style={{ fontSize: 11, color: '#64748b', fontWeight: 600, letterSpacing: 2, textTransform: 'uppercase', marginBottom: 4 }}>
+            // JALONS PROJET
           </div>
-          <div className="sec-label">// Planning</div>
-          <h1 className="sec-title" style={{ marginBottom:4 }}>Jalons du projet</h1>
-          <p style={{ fontSize:12, color:'var(--muted)' }}>{jalons.length} jalon{jalons.length !== 1 ? 's' : ''} · {overdue.length} en retard · {done.length} atteint{done.length !== 1 ? 's' : ''}</p>
+          <h1 style={{ fontSize: 28, fontWeight: 800, margin: 0 }}>📅 Jalons</h1>
         </div>
-        <button className="btn-gold" onClick={() => { setShowForm(true); setEditId(null); setForm({ name:'', jalon_type:'livrable', target_date:'', status:'pending', notes:'' }) }}>
-          + Ajouter un jalon
-        </button>
-      </div>
-
-      {/* Navigation onglets */}
-      <div style={{ display:'flex', gap:6, marginBottom:16, borderBottom:'1px solid var(--line)', paddingBottom:12 }}>
-        {[
-          { label:'📄 Documents', href:`/projects/${id}` },
-          { label:'⚠ RAID',      href:`/projects/${id}/raid` },
-          { label:'📅 Jalons',   href:`/projects/${id}/jalons` },
-          { label:'📊 PERT',     href:`/projects/${id}/pert` },
-          { label:'🧠 Mind Map', href:`/projects/${id}/mindmap` },
-        ].map(tab => (
-          <button key={tab.href} onClick={() => router.push(tab.href)}
-            style={{ padding:'7px 16px', fontSize:12, fontFamily:'var(--mono)', cursor:'pointer', borderRadius:8, border:'1px solid var(--line2)', background: tab.href === `/projects/${id}/jalons` ? 'rgba(200,168,75,.15)' : 'transparent', color: tab.href === `/projects/${id}/jalons` ? 'var(--gold2)' : 'var(--muted)', fontWeight: tab.href === `/projects/${id}/jalons` ? 600 : 400, transition:'all .12s' }}>
-            {tab.label}
-          </button>
-        ))}
-      </div>
-
-      {/* KPIs */}
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:10, marginBottom:20 }}>
-        {[
-          { label:'Total', value:jalons.length, color:'var(--white)' },
-          { label:'En retard', value:overdue.length, color:'var(--red)' },
-          { label:'À venir', value:upcoming.length, color:'var(--amber)' },
-          { label:'Atteints', value:done.length, color:'var(--green)' },
-        ].map(k => (
-          <div key={k.label} className="kpi">
-            <div className="kpi-label">{k.label}</div>
-            <div className="kpi-value" style={{ color:k.color }}>{k.value}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* Formulaire */}
-      {showForm && (
-        <div className="card" style={{ marginBottom:20 }}>
-          <div className="card-hdr">
-            <div className="card-title">{editId ? 'Modifier le jalon' : '+ Nouveau jalon'}</div>
-            <button onClick={() => { setShowForm(false); setEditId(null) }} style={{ background:'none', border:'none', color:'var(--dim)', cursor:'pointer', fontSize:18 }}>×</button>
-          </div>
-          <div className="card-body">
-            <div className="fg"><label className="fl">Nom du jalon *</label>
-              <input className="fi" placeholder="Ex : GO recette VABF, Livraison lot 1..." value={form.name} onChange={e => set('name', e.target.value)} />
-            </div>
-            <div className="grid-2">
-              <div className="fg"><label className="fl">Type</label>
-                <select className="fi fi-select" value={form.jalon_type} onChange={e => set('jalon_type', e.target.value)}>
-                  {Object.entries(JALON_TYPES).map(([k, v]) => <option key={k} value={k}>{v.icon} {v.label}</option>)}
-                </select>
-              </div>
-              <div className="fg"><label className="fl">Statut</label>
-                <select className="fi fi-select" value={form.status} onChange={e => set('status', e.target.value)}>
-                  {Object.entries(STATUS_JALONS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-                </select>
-              </div>
-            </div>
-            <div className="grid-2">
-              <div className="fg"><label className="fl">Date cible</label>
-                <input className="fi" type="date" value={form.target_date} onChange={e => set('target_date', e.target.value)} />
-              </div>
-              <div className="fg"><label className="fl">Notes</label>
-                <input className="fi" placeholder="Notes, critères d'acceptation..." value={form.notes} onChange={e => set('notes', e.target.value)} />
-              </div>
-            </div>
-            <div style={{ display:'flex', gap:10 }}>
-              <button className="btn-gold" onClick={saveJalon} disabled={saving || !form.name.trim()}>
-                {saving ? 'Sauvegarde...' : editId ? 'Mettre à jour' : 'Ajouter le jalon'}
-              </button>
-              <button className="btn-ghost" onClick={() => { setShowForm(false); setEditId(null) }}>Annuler</button>
-            </div>
+        <div style={{ margin: '16px 0' }}>
+          <ActionBar
+            history={history} onLoadHistory={loadHistory}
+            primaryLabel="Générer Jalons" primaryIcon="⚡" onPrimary={generate} loading={loading}
+            onPrint={() => printSection('jalons-content', `Jalons — ${project?.name}`)}
+            onExportExcel={() => exportToExcel(toRows(), `Jalons_${project?.name}`)}
+            onExportPDF={() => exportToPDF('jalons-content', `Jalons — ${project?.name}`)}
+            onExportDrive={() => exportToDrive(JSON.stringify(jalons, null, 2), `Jalons_${project?.name}.json`)}
+            onExportNotion={() => exportToNotion(`Jalons — ${project?.name}`, jalons.map(j => ({ content: `${j.code} ${j.name} — ${j.date} — ${j.status}` })))}
+            onExportGmail={() => exportToGmail(`Jalons — ${project?.name}`, jalons.map(j => `${j.code} ${j.name}\nDate: ${j.date} | Statut: ${j.status}`).join('\n\n'))}
+          />
+        </div>
+        <div id="jalons-content">
+          {jalons.length === 0 && !loading && (
+            <EmptyState icon="📅" label="Aucun jalon" hint='Cliquez sur "Générer Jalons"' />
+          )}
+          {loading && <LoadingState label="Génération des jalons..." />}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {jalons.map((jalon, i) => {
+              const cfg = STATUS_CONFIG[jalon.status] ?? { color: '#64748b', icon: '📅' }
+              return (
+                <div key={jalon.id} style={{
+                  background: '#0f172a', border: `1px solid #1e293b`,
+                  borderLeft: `4px solid ${cfg.color}`, borderRadius: 10, padding: 16,
+                  display: 'grid', gridTemplateColumns: '80px 1fr 1fr 1fr', gap: 16, alignItems: 'center'
+                }}>
+                  <div style={{ textAlign: 'center' }}>
+                    <div style={{ fontSize: 11, color: '#64748b', fontFamily: 'monospace' }}>{jalon.code}</div>
+                    <div style={{ fontSize: 20, marginTop: 4 }}>{cfg.icon}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: '#f1f5f9' }}>{jalon.name}</div>
+                    <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 4 }}>{jalon.description}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 12, color: '#fbbf24' }}>📅 {jalon.date}</div>
+                    <div style={{ fontSize: 12, color: '#60a5fa', marginTop: 4 }}>👤 {jalon.responsible}</div>
+                    <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>📦 {jalon.deliverables}</div>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <span style={{
+                      fontSize: 11, background: cfg.color + '22', color: cfg.color,
+                      borderRadius: 20, padding: '4px 12px', fontWeight: 600
+                    }}>{jalon.status}</span>
+                  </div>
+                </div>
+              )
+            })}
           </div>
         </div>
-      )}
-
-      {loading ? (
-        <div style={{ textAlign:'center', padding:40, color:'var(--muted)' }}>Chargement...</div>
-      ) : jalons.length === 0 ? (
-        <div className="empty">
-          <div className="empty-icon">📅</div>
-          <div style={{ fontFamily:'var(--syne)', fontSize:16, fontWeight:600, color:'var(--white)', marginBottom:8 }}>Aucun jalon</div>
-          <div style={{ fontSize:12, color:'var(--muted)' }}>Ajoutez vos jalons pour suivre l'avancement du projet.</div>
-        </div>
-      ) : (
-        <>
-          {overdue.length > 0 && (
-            <div style={{ marginBottom:20 }}>
-              <div style={{ fontSize:11, color:'var(--red)', fontWeight:600, letterSpacing:'.08em', textTransform:'uppercase', marginBottom:10, display:'flex', alignItems:'center', gap:6 }}>
-                <span>⚠</span> En retard ({overdue.length})
-              </div>
-              <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
-                {overdue.map(j => <JalonCard key={j.id} item={j} />)}
-              </div>
-            </div>
-          )}
-          {upcoming.length > 0 && (
-            <div style={{ marginBottom:20 }}>
-              <div style={{ fontSize:11, color:'var(--amber)', fontWeight:600, letterSpacing:'.08em', textTransform:'uppercase', marginBottom:10 }}>
-                À venir ({upcoming.length})
-              </div>
-              <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
-                {upcoming.map(j => <JalonCard key={j.id} item={j} />)}
-              </div>
-            </div>
-          )}
-          {done.length > 0 && (
-            <div>
-              <div style={{ fontSize:11, color:'var(--green)', fontWeight:600, letterSpacing:'.08em', textTransform:'uppercase', marginBottom:10 }}>
-                Atteints ({done.length})
-              </div>
-              <div style={{ display:'flex', flexDirection:'column', gap:8, opacity:.7 }}>
-                {done.map(j => <JalonCard key={j.id} item={j} />)}
-              </div>
-            </div>
-          )}
-        </>
-      )}
+      </div>
     </AppLayout>
   )
 }
+

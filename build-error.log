@@ -1,0 +1,23 @@
+
+> pmo-ia-studio@2.0.0 build
+> next build
+
+  ▲ Next.js 14.2.35
+  - Environments: .env.local
+
+   Creating an optimized production build ...
+ ✓ Compiled successfully
+   Linting and checking validity of types ...
+Failed to compile.
+
+./src/app/(app)/projects/[id]/gantt/page.tsx:75:22
+Type error: Type 'Set<string>' can only be iterated through when using the '--downlevelIteration' flag or with a '--target' of 'es2015' or higher.
+
+[0m [90m 73 |[39m[0m
+[0m [90m 74 |[39m   [90m// Group by phase[39m[0m
+[0m[31m[1m>[22m[39m[90m 75 |[39m   [36mconst[39m phases [33m=[39m [[33m...[39m[36mnew[39m [33mSet[39m(tasks[33m.[39mmap(t [33m=>[39m t[33m.[39mphase))][0m
+[0m [90m    |[39m                      [31m[1m^[22m[39m[0m
+[0m [90m 76 |[39m   [36mconst[39m totalDays [33m=[39m tasks[33m.[39mlength [33m>[39m [35m0[39m[0m
+[0m [90m 77 |[39m     [33m?[39m [33mMath[39m[33m.[39mceil(([36mnew[39m [33mDate[39m([33mMath[39m[33m.[39mmax([33m...[39mtasks[33m.[39mmap(t [33m=>[39m [36mnew[39m [33mDate[39m(t[33m.[39mend)[33m.[39mgetTime())))[33m.[39mgetTime() [33m-[39m[0m
+[0m [90m 78 |[39m         [36mnew[39m [33mDate[39m([33mMath[39m[33m.[39mmin([33m...[39mtasks[33m.[39mmap(t [33m=>[39m [36mnew[39m [33mDate[39m(t[33m.[39mstart)[33m.[39mgetTime())))[33m.[39mgetTime()) [33m/[39m [35m86400000[39m)[0m
+Next.js build worker exited with code: 1 and signal: null
